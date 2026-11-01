@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GAP WashHub Laundry POS</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <style id="page-style"></style>
+</head>
+<body>
+<div id="app">
+  <!-- ===== Top bar ===== -->
+  <header class="topbar">
+    <div class="brand">
+      <!-- Logo: images/logo.webp (falls back to a "GAP" badge if the file is missing) -->
+      <div class="logo"><img src="images/logo.webp" alt="GAP WashHub Laundry logo" onerror="this.parentNode.textContent='GAP'"></div>
+      <div>
+        <div class="brand-name">GAP <span class="bn-hub">WashHub</span> <span class="bn-laundry">Laundry</span></div>
+        <div class="brand-addr">Lot 3 Blk 14E Phase 3C Tamban St. Kaunlaran Village, Caloocan City</div>
+      </div>
+    </div>
+    <div class="clock" id="clock"></div>
+  </header>
+
+  <div class="layout">
+    <!-- ===== Navigation ===== -->
+    <nav class="sidebar" id="nav">
+      <button class="nav-btn" data-view="dashboard">Dashboard</button>
+      <button class="nav-btn nav-primary" data-view="new">+ New Order</button>
+      <button class="nav-btn" data-view="paid">Paid – Need to Get Out <span class="count c-green" id="cnt-paid">0</span></button>
+      <button class="nav-btn" data-view="unpaid">Not Paid <span class="count c-red" id="cnt-unpaid">0</span></button>
+      <button class="nav-btn" data-view="completed">Completed Orders</button>
+      <button class="nav-btn" data-view="loyalty">★ Loyalty Card</button>
+      <button class="nav-btn" data-view="sales">Sales Summary</button>
+      <button class="nav-btn" data-view="history">Order History</button>
+      <div class="nav-foot">
+        <div class="nav-foot-title">Data backup</div>
+        <button class="btn small ghost" id="btn-export">Export to Excel (.xlsx)</button>
+        <button class="btn small ghost" id="btn-import">Import from Excel (.xlsx)</button>
+        <input type="file" id="import-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.json" hidden>
+      </div>
+    </nav>
+
+    <main class="main">
+      <!-- ===== Dashboard ===== -->
+      <section class="view" id="view-dashboard">
+        <div class="view-head"><h1>Dashboard</h1><span class="muted" id="dash-date"></span></div>
+        <div class="stats" id="dash-stats"></div>
+        <div class="quick-links">
+          <button class="ql ql-blue" data-goto="new"><b>New Order</b><span>Take a new laundry order</span></button>
+          <button class="ql ql-green" data-goto="paid"><b>Paid – Need to Get Out</b><span id="ql-paid"></span></button>
+          <button class="ql ql-red" data-goto="unpaid"><b>Not Paid</b><span id="ql-unpaid"></span></button>
+          <button class="ql ql-gray" data-goto="completed"><b>Completed Orders</b><span id="ql-completed"></span></button>
+          <button class="ql ql-gray" data-goto="sales"><b>Sales Summary</b><span>Cash, GCash &amp; unpaid totals</span></button>
+          <button class="ql ql-gray" data-goto="history"><b>Order History</b><span>View &amp; reprint receipts</span></button>
+        </div>
+        <div class="card">
+          <h2>Today's Orders</h2>
+          <div id="dash-recent"></div>
+        </div>
+      </section>
+
+      <!-- ===== New Order ===== -->
+      <section class="view" id="view-new">
+        <div class="pos">
+          <div class="pos-left card">
+            <h2>Laundry Services <span class="muted small">— tap to add</span></h2>
+            <div id="service-groups"></div>
+            <div class="svc-group custom-svc">
+              <div class="svc-group-title">Other / Custom Service or Expense</div>
+              <div class="seg custom-type" id="custom-type">
+                <button type="button" data-val="service" class="on">+ Service</button>
+                <button type="button" data-val="expense" class="seg-expense">− Expense</button>
+              </div>
+              <div class="custom-row">
+                <input id="custom-name" maxlength="40" autocomplete="off" placeholder="Service name (e.g. Comforter, Ironing)">
+                <div class="custom-amt">
+                  <span class="peso-prefix">₱</span>
+                  <input id="custom-price" type="number" step="0.01" inputmode="decimal" placeholder="Amount">
+                </div>
+                <button type="button" class="btn primary" id="btn-add-custom">+ Add</button>
+              </div>
+              <div class="form-error" id="custom-error" role="alert"></div>
+            </div>
+          </div>
+          <aside class="pos-right card">
+            <h2>Current Order</h2>
+            <div class="info" id="edit-banner" hidden>
+              Editing receipt <b id="edit-banner-id"></b>. Change anything, then tap <b>SAVE CHANGES</b>.
+              <button type="button" class="btn small ghost" id="btn-cancel-edit">Cancel edit</button>
+            </div>
+            <div class="form-grid">
+              <label class="full">Customer Name <span class="req">*</span>
+                <input id="cust-name" list="cust-list" autocomplete="off" maxlength="60" placeholder="e.g. Mara">
+                <datalist id="cust-list"></datalist>
+              </label>
+              <label>Contact Number <span class="muted">(optional)</span>
+                <input id="cust-contact" inputmode="tel" autocomplete="off" maxlength="16" placeholder="09XXXXXXXXX">
+              </label>
+              <label>Date &amp; Time <span class="muted" id="dt-mode">(auto)</span>
+                <span class="dt-row">
+                  <input id="order-datetime" type="datetime-local">
+                  <button type="button" class="btn small ghost" id="btn-dt-now" title="Use the current date and time">Now</button>
+                </span>
+              </label>
+            </div>
+            <div class="cart" id="cart"></div>
+            <div class="loyalty-box">
+              <div class="lb-head">
+                <span><b>★ Loyalty ticks</b> this order <button type="button" class="link-btn" id="tick-mode" title="Tap to count automatically again">(auto)</button></span>
+                <div class="qty">
+                  <button type="button" id="tick-dec" aria-label="Remove a tick">−</button>
+                  <span id="tick-count">0</span>
+                  <button type="button" id="tick-inc" aria-label="Add a tick">+</button>
+                </div>
+              </div>
+              <div id="loyalty-status"></div>
+            </div>
+            <label class="notes-label">Notes / Special Instructions
+              <textarea id="order-notes" rows="2" maxlength="300" placeholder="e.g. Separate whites, no fabcon, pickup tomorrow 5PM"></textarea>
+            </label>
+            <div class="cart-total"><span>TOTAL</span><span id="cart-total">₱0.00</span></div>
+            <div class="form-error" id="order-error" role="alert"></div>
+            <div class="row gap">
+              <button class="btn ghost" id="btn-clear">Clear</button>
+              <button class="btn primary big grow" id="btn-checkout">CHECKOUT</button>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ===== Paid but need to get out ===== -->
+      <section class="view" id="view-paid">
+        <div class="view-head">
+          <h1>Paid but Need to Get Out</h1>
+          <input class="search" data-search="paid" type="search" placeholder="Search name, contact or order no.">
+        </div>
+        <p class="muted">Paid orders whose laundry has not been claimed yet.</p>
+        <div class="order-grid" id="list-paid"></div>
+      </section>
+
+      <!-- ===== Not paid ===== -->
+      <section class="view" id="view-unpaid">
+        <div class="view-head">
+          <h1>Not Paid</h1>
+          <input class="search" data-search="unpaid" type="search" placeholder="Search name, contact or order no.">
+        </div>
+        <p class="muted">Orders with an outstanding balance.</p>
+        <div class="order-grid" id="list-unpaid"></div>
+      </section>
+
+      <!-- ===== Completed ===== -->
+      <section class="view" id="view-completed">
+        <div class="view-head">
+          <h1>Completed Orders</h1>
+          <input class="search" data-search="completed" type="search" placeholder="Search name, contact or order no.">
+        </div>
+        <p class="muted">Laundry already claimed / picked up by the customer.</p>
+        <div class="order-grid" id="list-completed"></div>
+      </section>
+
+      <!-- ===== Loyalty cards ===== -->
+      <section class="view" id="view-loyalty">
+        <div class="view-head">
+          <h1>★ Loyalty Card</h1>
+          <input class="search" id="loyalty-search" type="search" placeholder="Search name or contact">
+        </div>
+        <p class="muted">1 tick per basket. The <b>7th</b> and <b>14th</b> tick each earn <b>1 FREE Package A</b>, then a new card starts.
+          <span id="loyalty-summary"></span></p>
+
+        <div class="card ladj" id="ladj-form">
+          <h2>Add paper card / Adjust ticks</h2>
+          <p class="muted small">Use this to copy ticks from a customer's existing paper card, or to correct a mistake (use a minus sign to remove ticks).</p>
+          <div class="ladj-grid">
+            <label>Customer Name <span class="req">*</span><input id="ladj-name" list="cust-list" autocomplete="off" maxlength="60"></label>
+            <label>Contact Number <span class="muted">(optional)</span><input id="ladj-contact" inputmode="tel" autocomplete="off" maxlength="16" placeholder="09XXXXXXXXX"></label>
+            <label>Ticks to add<input id="ladj-ticks" type="number" step="1" inputmode="numeric" placeholder="e.g. 5 or -1"></label>
+            <label>Free already used<input id="ladj-used" type="number" step="1" min="0" inputmode="numeric" placeholder="0"></label>
+            <label class="ladj-note">Note <span class="muted">(optional)</span><input id="ladj-note" maxlength="80" placeholder="e.g. From paper card"></label>
+            <button type="button" class="btn primary" id="ladj-save">Save</button>
+          </div>
+          <div class="form-error" id="ladj-error" role="alert"></div>
+        </div>
+
+        <div class="order-grid" id="loyalty-list"></div>
+      </section>
+
+      <!-- ===== Sales summary ===== -->
+      <section class="view" id="view-sales">
+        <div class="view-head">
+          <h1>Sales Summary</h1>
+          <label class="inline">Date <input type="date" id="sales-date"></label>
+        </div>
+        <div class="stats" id="sales-stats"></div>
+        <div class="card">
+          <h2>Payments Received <span class="muted small" id="sales-day-label"></span></h2>
+          <p class="muted small">Only actual payments received are counted as sales. Unpaid orders are not counted.</p>
+          <div id="sales-payments"></div>
+        </div>
+      </section>
+
+      <!-- ===== History ===== -->
+      <section class="view" id="view-history">
+        <div class="view-head"><h1>Order History</h1></div>
+        <div class="filters">
+          <input class="search" id="hist-search" type="search" placeholder="Search name, contact or order no.">
+          <input type="date" id="hist-date" title="Filter by order date">
+          <select id="hist-pay">
+            <option value="">All payments</option>
+            <option value="PAID">Paid</option>
+            <option value="NOT PAID">Not Paid</option>
+          </select>
+          <select id="hist-status">
+            <option value="">All order status</option>
+            <option value="PROCESSING">Processing</option>
+            <option value="COMPLETED">Completed / Claimed</option>
+          </select>
+          <button class="btn small ghost" id="hist-reset">Reset</button>
+        </div>
+        <div class="card" id="hist-table"></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- ===== Payment modal ===== -->
+<div class="modal" id="pay-modal" hidden>
+  <div class="modal-box wide" role="dialog" aria-modal="true" aria-labelledby="pay-title">
+    <div class="modal-head">
+      <h2 id="pay-title">Checkout</h2>
+      <button class="x" data-close aria-label="Close">×</button>
+    </div>
+    <div class="modal-body pay-grid">
+      <div>
+        <div class="kv"><span>Customer</span><b id="pay-cust"></b></div>
+        <div class="kv" id="pay-orderid-row"><span>Order No.</span><b id="pay-orderid"></b></div>
+        <div class="field-label">Order Summary</div>
+        <div id="pay-summary"></div>
+      </div>
+      <div>
+        <div class="total-box"><span id="pay-due-label">TOTAL AMOUNT</span><b id="pay-total">₱0.00</b></div>
+
+        <div id="pay-status-wrap">
+          <div class="field-label">Payment Status</div>
+          <div class="seg" id="pay-status-seg">
+            <button type="button" data-val="PAID" class="seg-paid">PAID</button>
+            <button type="button" data-val="NOT PAID" class="seg-unpaid">NOT PAID</button>
+          </div>
+        </div>
+
+        <div id="pay-fields">
+          <div class="field-label">Payment Method</div>
+          <div class="seg" id="pay-method-seg">
+            <button type="button" data-val="Cash">Cash</button>
+            <button type="button" data-val="GCash">GCash</button>
+          </div>
+          <label id="gcash-ref-wrap" hidden>GCash Reference No. <span class="muted">(optional)</span>
+            <input id="gcash-ref" maxlength="20" inputmode="numeric" autocomplete="off">
+          </label>
+          <label id="paydate-wrap" hidden>Payment Date &amp; Time
+            <input id="pay-date" type="datetime-local">
+          </label>
+          <div id="cash-fields">
+            <label>Amount Received
+              <div class="amt-row">
+                <span class="peso-prefix">₱</span>
+                <input id="pay-received" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00">
+                <button type="button" class="btn exact" id="btn-exact">EXACT AMOUNT</button>
+              </div>
+            </label>
+            <div class="quick" id="quick-cash"></div>
+            <div class="change-box" id="change-box"><span id="change-label">CHANGE</span><b id="pay-change">₱0.00</b></div>
+            <div class="info" id="short-info" hidden></div>
+          </div>
+          <div class="info expense-info" id="expense-info" hidden></div>
+        </div>
+
+        <div class="info" id="unpaid-info" hidden>
+          This order will be saved as <b>NOT PAID</b>.<br>
+          Outstanding balance: <b id="unpaid-balance"></b>
+        </div>
+        <div class="form-error" id="pay-error" role="alert"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close>Cancel</button>
+      <button class="btn primary big" id="btn-confirm-pay">CONFIRM PAYMENT</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Receipt modal ===== -->
+<div class="modal" id="receipt-modal" hidden>
+  <div class="modal-box narrow" role="dialog" aria-modal="true" aria-labelledby="receipt-title">
+    <div class="modal-head">
+      <h2 id="receipt-title">Receipt</h2>
+      <button class="x" data-close aria-label="Close">×</button>
+    </div>
+    <div class="receipt-note" id="receipt-note" hidden></div>
+    <div class="modal-body receipt-scroll">
+      <div class="receipt-preview" id="receipt-preview"></div>
+    </div>
+    <div class="modal-foot receipt-foot">
+      <label class="inline small">Paper
+        <select id="paper-size">
+          <option value="58">58mm thermal</option>
+          <option value="80">80mm thermal</option>
+          <option value="a4">Normal printer (A4/Letter)</option>
+        </select>
+      </label>
+      <div class="row gap">
+        <button class="btn ghost big" id="btn-edit-receipt">EDIT</button>
+        <button class="btn secondary big" id="btn-print">PRINT RECEIPT</button>
+        <button class="btn primary big" id="btn-done">DONE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Confirm modal ===== -->
+<div class="modal" id="confirm-modal" hidden>
+  <div class="modal-box small-box" role="alertdialog" aria-modal="true">
+    <div class="modal-body"><p id="confirm-msg"></p></div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="confirm-no">Cancel</button>
+      <button class="btn primary" id="confirm-yes">Yes</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<!-- Only this element is printed -->
+<div id="print-area"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
