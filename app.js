@@ -1355,14 +1355,14 @@
   }
 
   /* ---------------- Backup: Excel (.xlsx) export / import ---------------- */
-  // The Excel library (SheetJS) is bundled in js/vendor and loaded only when needed.
+  // The Excel library (SheetJS) is bundled (xlsx.full.min.js) and loaded only when needed.
   let xlsxLoading = null;
   function loadXLSX() {
     if (window.XLSX) return Promise.resolve(window.XLSX);
     if (!xlsxLoading) {
       xlsxLoading = new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        s.src = 'js/vendor/xlsx.full.min.js';
+        s.src = 'xlsx.full.min.js';
         s.onload = () => resolve(window.XLSX);
         s.onerror = () => { xlsxLoading = null; reject(new Error('Could not load the Excel library.')); };
         document.head.appendChild(s);
