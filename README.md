@@ -31,6 +31,9 @@ Every device that signs in sees the same orders, updated live. Sign in with the 
 - Without internet the app still works on that device and sends the changes when the connection returns.
 - Order numbers come from the server, so two devices never use the same number while online.
 - The Firebase settings are in `FIREBASE_CONFIG` near the top of `app.js`.
+- **Owners and staff:** the emails in `OWNER_EMAILS` (top of `app.js`) are owners and see everything. Every other
+  login is staff: no Sales Summary, no "Total Sales Today" on the Dashboard, and no Import, Export, Edit,
+  Delete order or Delete loyalty card. Staff can still take orders, mark them paid/claimed, print receipts and add loyalty ticks.
 
 Firestore security rules (Firestore → Rules) must allow only signed-in users:
 

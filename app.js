@@ -86,6 +86,26 @@
   };
   const SETTINGS_KEY = 'gapwashhub_pos_settings_v1'; // paper size etc. stay per device
 
+  // Owner logins (lowercase). The owner sees everything. Every other login is STAFF and cannot see
+  // Sales Summary or today's sales, and cannot import, export, edit saved orders, delete orders or delete loyalty cards.
+  const OWNER_EMAILS = [
+    'alidoalbert8@gmail.com',
+    'leaalido16@gmail.com',
+    'aaronalido@gmail.com',
+    'alidoaaliyah7@gmail.com'
+  ];
+  const isOwner = () => !!(cloud.user && cloud.user.email && OWNER_EMAILS.includes(cloud.user.email.toLowerCase()));
+  function ownerOnly() {
+    if (isOwner()) return true;
+    toast('Only the owner can do this.');
+    return false;
+  }
+  function applyRole() {
+    const staff = !isOwner();
+    document.body.classList.toggle('role-staff', staff);
+    if (staff && currentView === 'sales') showView('dashboard');
+  }
+
   /* ---------------- Storage ---------------- */
   function emptyDB() { return { version: 1, orders: [], seq: {}, loyaltyAdjust: [], loyaltyDeleted: [], settings: { paper: '80' } }; }
   const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -303,7 +323,7 @@
     el.className = 'sync-status ' + cls;
     el.textContent = txt;
     const who = $('#signed-in-as');
-    if (who) who.textContent = cloud.user ? cloud.user.email : '';
+    if (who) who.textContent = cloud.user ? cloud.user.email + (isOwner() ? ' · Owner' : ' · Staff') : '';
   }
 
   /* ---------------- Login screen ---------------- */
@@ -360,6 +380,7 @@
 
     cloud.auth.onAuthStateChanged((user) => {
       cloud.user = user;
+      applyRole();
       if (user) {
         showAuthScreen('loading');
         cloud.listen();
@@ -519,6 +540,7 @@
 
   function showView(name) {
     if (!VIEWS.includes(name)) name = 'dashboard';
+    if (name === 'sales' && !isOwner()) name = 'dashboard';
     currentView = name;
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
     $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
@@ -767,6 +789,7 @@
   // Load a saved order into the order form so it can be changed
   let editReturnView = null;
   async function startEdit(id) {
+    if (!ownerOnly()) return;
     db = loadDB();
     const o = findOrder(id);
     if (!o) return;
@@ -962,7 +985,7 @@
     $('#dash-date').textContent = fmtLongDate(new Date());
     $('#dash-stats').innerHTML =
       stat('Total Transactions Today', todays.length, 'Ordered or paid today', '') +
-      stat('Total Sales Today', peso(s.total), `Cash ${peso(s.cash)} · GCash ${peso(s.gcash)}` + (s.expenses ? `<br>After ${peso(s.expenses)} expenses` : ''), 'green') +
+      (isOwner() ? stat('Total Sales Today', peso(s.total), `Cash ${peso(s.cash)} · GCash ${peso(s.gcash)}` + (s.expenses ? `<br>After ${peso(s.expenses)} expenses` : ''), 'green') : '') +
       stat('Unpaid Orders', unpaid.length, `Balance: ${peso(unpaidAmt)}`, 'red') +
       stat('Paid – Waiting to be Claimed', waiting.length, '', 'amber') +
       stat('Completed Orders', completedToday.length, `Today · ${completed.length} all-time`, 'gray');
@@ -1107,6 +1130,7 @@
   }
 
   async function deleteLoyaltyCard(key) {
+    if (!ownerOnly()) return;
     const c = loyaltyCustomers().get(key);
     if (!c) return;
     const ok = await ask(`Are you sure you want to delete this loyalty card?\n\n${c.name}${c.contact ? ' (' + c.contact + ')' : ''} · ${c.onCard}/${LOYALTY.cardSize} ticks, ${c.available} free available.\n\nThis permanently removes the card. Orders are not deleted.`, 'Delete card', 'danger');
@@ -1616,6 +1640,7 @@
   }
 
   async function deleteOrder(id) {
+    if (!ownerOnly()) return;
     const o = findOrder(id);
     if (!o) return;
     const paidNote = o.amountPaid > 0 ? `\n\nIts payment of ${peso(o.amountPaid)} will also be removed from the sales totals.` : '';
@@ -1661,6 +1686,7 @@
   }
 
   async function exportBackup() {
+    if (!ownerOnly()) return;
     let XLSX;
     try { XLSX = await loadXLSX(); } catch (e) { alert(e.message); return; }
     db = loadDB();
@@ -1854,6 +1880,7 @@
   }
 
   async function importBackup(file) {
+    if (!ownerOnly()) return;
     let data;
     try {
       if (/\.json$/i.test(file.name)) {
