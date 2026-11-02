@@ -103,7 +103,7 @@
   function applyRole() {
     const staff = !isOwner();
     document.body.classList.toggle('role-staff', staff);
-    if (staff && currentView === 'sales') showView('dashboard');
+    if (staff && (currentView === 'sales' || currentView === 'activity')) showView('dashboard');
   }
 
   /* ---------------- Storage ---------------- */
@@ -216,7 +216,33 @@
       if (Object.keys(seq).length) metaData.seq = seq;
       if (Object.keys(metaData).length) ops.push({ t: 'set', ref: metaRef, data: metaData, opt: { merge: true } });
       if (!ops.length) return;
+      // Activity log: who changed what, saved together with the change
+      const entries = describeChanges(before, after, this.keyOf.bind(this));
+      if (entries.length) ops.push(this.logOp(entries));
       this.commit(ops).catch((e) => cloudError(e));
+    },
+
+    // One log document per day: logs/{YYYY-MM-DD} → { entries: [...] }
+    logOp(entries) {
+      const by = (this.user && this.user.email) || '';
+      const at = new Date().toISOString();
+      const list = entries.map((e) => ({ at, by, action: e.action, order: e.order || '', details: e.details || '',
+        id: Math.random().toString(36).slice(2, 10) }));
+      return { t: 'set', ref: this.fs.collection('logs').doc(dateKey(at)),
+        data: { entries: firebase.firestore.FieldValue.arrayUnion(...list) }, opt: { merge: true } };
+    },
+
+    // Activity Log page: listen to one day's log
+    logDay: null, logEntries: [], logUnsub: null,
+    watchLog(day) {
+      if (this.logDay === day && this.logUnsub) return;
+      if (this.logUnsub) { this.logUnsub(); this.logUnsub = null; }
+      this.logDay = day; this.logEntries = [];
+      if (!this.fs || !this.user) return;
+      this.logUnsub = this.fs.collection('logs').doc(day).onSnapshot((d) => {
+        this.logEntries = (d.exists && Array.isArray(d.data().entries)) ? d.data().entries : [];
+        if (currentView === 'activity') renderActivity();
+      }, (e) => { console.error(e); this.logEntries = []; if (currentView === 'activity') renderActivity(); });
     },
 
     // Replace ALL shared data (used by Import). Deletes every day document, then writes the new ones.
@@ -233,6 +259,7 @@
       byDay.forEach((orders, k) => ops.push({ t: 'set', ref: this.fs.collection('days').doc(k), data: { orders } }));
       ops.push({ t: 'set', ref: this.fs.collection('pos').doc('meta'), data: {
         loyaltyAdjust: clone(data.loyaltyAdjust || []), loyaltyDeleted: clone(data.loyaltyDeleted || []), seq: clone(data.seq || {}) } });
+      ops.push(this.logOp([{ action: 'Imported from Excel', details: `Replaced all data with ${(data.orders || []).length} order(s)` }]));
       // Deletes must land before the new documents for the same day, so commit in order
       await this.commit(ops);
     },
@@ -275,8 +302,112 @@
         this.rebuild();
       }, (e) => cloudError(e)));
     },
-    stop() { this.unsub.forEach((u) => { try { u(); } catch (e) { /* ignore */ } }); this.unsub = []; }
+    stop() {
+      this.unsub.forEach((u) => { try { u(); } catch (e) { /* ignore */ } }); this.unsub = [];
+      if (this.logUnsub) { this.logUnsub(); this.logUnsub = null; this.logDay = null; }
+    }
   };
+
+  /* ---------------- Activity log ---------------- */
+  const itemsText = (o) => (o.items || []).map((i) => `${i.name}${i.qty > 1 ? ' ×' + i.qty : ''}`).join(', ') || '—';
+  const payText = (p) => p ? `${peso(p.amount)} ${p.method}${p.ref ? ' (ref ' + p.ref + ')' : ''}` : '';
+
+  // Compare two versions of the data and describe each change in plain words
+  function describeChanges(before, after, keyOf) {
+    const out = [];
+    const bMap = new Map(before.orders.map((o) => [keyOf(o), o]));
+    const aMap = new Map(after.orders.map((o) => [keyOf(o), o]));
+    aMap.forEach((o, k) => {
+      const b = bMap.get(k);
+      const name = (o.customer && o.customer.name) || '';
+      if (!b) {
+        const p = (o.payments || [])[0];
+        const kind = toC(o.total) < 0 ? 'New expense' : 'New order';
+        out.push({ action: kind, order: o.id, details: `${name} · ${itemsText(o)} · Total ${peso(o.total)} · ${o.paymentStatus}${p ? ' · Received ' + payText(p) : ''}` });
+        return;
+      }
+      if (JSON.stringify(b) === JSON.stringify(o)) return;
+      const edits = [];
+      const bn = (b.customer && b.customer.name) || '', bc = (b.customer && b.customer.contact) || '', oc = (o.customer && o.customer.contact) || '';
+      if (bn !== name) edits.push(`Name: ${bn} → ${name}`);
+      if (bc !== oc) edits.push(`Contact: ${bc || '—'} → ${oc || '—'}`);
+      if (itemsText(b) !== itemsText(o)) edits.push(`Services: ${itemsText(b)} → ${itemsText(o)}`);
+      if (toC(b.total) !== toC(o.total)) edits.push(`Total: ${peso(b.total)} → ${peso(o.total)}`);
+      if (b.createdAt !== o.createdAt && b.createdAt && o.createdAt && b.createdAt.slice(0, 16) !== o.createdAt.slice(0, 16)) edits.push(`Date: ${fmtDT(b.createdAt)} → ${fmtDT(o.createdAt)}`);
+      if ((b.notes || '') !== (o.notes || '')) edits.push(`Notes: "${b.notes || ''}" → "${o.notes || ''}"`);
+      if ((b.loyaltyTicks || 0) !== (o.loyaltyTicks || 0)) edits.push(`Loyalty ticks: ${b.loyaltyTicks || 0} → ${o.loyaltyTicks || 0}`);
+      if (edits.length) {
+        if (b.paymentStatus !== o.paymentStatus || toC(b.amountPaid) !== toC(o.amountPaid)) edits.push(`Payment: ${b.paymentStatus} ${peso(b.amountPaid)} → ${o.paymentStatus} ${peso(o.amountPaid)}`);
+        out.push({ action: 'Edited order', order: o.id, details: `${name} · ` + edits.join(' · ') });
+        return;
+      }
+      const newPays = (o.payments || []).slice((b.payments || []).length);
+      if (newPays.length) {
+        const paid = b.paymentStatus !== 'PAID' && o.paymentStatus === 'PAID';
+        out.push({ action: paid ? 'Marked as paid' : 'Partial payment', order: o.id,
+          details: `${name} · Received ${newPays.map(payText).join(', ')}${paid ? '' : ' · Balance ' + peso(o.balance)}` });
+      } else if (b.paymentStatus !== o.paymentStatus || toC(b.amountPaid) !== toC(o.amountPaid)) {
+        out.push({ action: 'Payment changed', order: o.id, details: `${name} · ${b.paymentStatus} ${peso(b.amountPaid)} → ${o.paymentStatus} ${peso(o.amountPaid)}` });
+      }
+      if (b.orderStatus !== o.orderStatus) {
+        if (o.orderStatus === 'COMPLETED') {
+          // Paying an unpaid order also marks it claimed; that is already in the "Marked as paid" line
+          if (!(newPays.length && o.paymentStatus === 'PAID' && b.paymentStatus !== 'PAID')) {
+            out.push({ action: o.paymentStatus === 'PAID' ? 'Marked as claimed' : 'Released without payment', order: o.id,
+              details: `${name}${o.paymentStatus === 'PAID' ? '' : ' · Unpaid balance ' + peso(o.balance)}` });
+          }
+        } else {
+          out.push({ action: 'Undo claim', order: o.id, details: name });
+        }
+      }
+    });
+    bMap.forEach((o, k) => {
+      if (aMap.has(k)) return;
+      out.push({ action: 'Deleted order', order: o.id, details: `${(o.customer && o.customer.name) || ''} · ${itemsText(o)} · Total ${peso(o.total)} · ${o.paymentStatus}` });
+    });
+    (after.loyaltyAdjust || []).slice((before.loyaltyAdjust || []).length).forEach((a) => {
+      out.push({ action: 'Loyalty ticks', details: `${a.name}${a.contact ? ' (' + a.contact + ')' : ''}: ${a.ticks >= 0 ? '+' : ''}${a.ticks} tick(s)${a.freeUsed ? ', ' + a.freeUsed + ' free used' : ''}${a.note ? ' · ' + a.note : ''}` });
+    });
+    (after.loyaltyDeleted || []).slice((before.loyaltyDeleted || []).length).forEach((x) => {
+      out.push({ action: 'Deleted loyalty card', details: `${x.name}${x.contact ? ' (' + x.contact + ')' : ''}` });
+    });
+    return out;
+  }
+
+  const ACTION_CLASS = { 'New order': 'a-new', 'New expense': 'a-new', 'Marked as paid': 'a-pay', 'Partial payment': 'a-pay',
+    'Payment changed': 'a-warn', 'Marked as claimed': 'a-claim', 'Released without payment': 'a-warn', 'Undo claim': 'a-warn',
+    'Edited order': 'a-warn', 'Deleted order': 'a-del', 'Deleted loyalty card': 'a-del', 'Loyalty ticks': 'a-claim', 'Imported from Excel': 'a-del' };
+
+  function renderActivity() {
+    if (!isOwner()) return;
+    const day = $('#log-date').value || todayKey();
+    if (!$('#log-date').value) $('#log-date').value = day;
+    cloud.watchLog(day);
+    const people = Array.from(new Set(cloud.logEntries.map((e) => e.by))).sort();
+    const sel = $('#log-person');
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">Everyone</option><option value="__staff">Staff only</option>' +
+      people.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+    sel.value = [...sel.options].some((o) => o.value === keep) ? keep : '';
+    const who = sel.value;
+    const q = $('#log-search').value.trim().toLowerCase();
+    const isOwnerEmail = (e) => OWNER_EMAILS.includes(String(e || '').toLowerCase());
+    const list = cloud.logEntries.filter((e) =>
+      (!who || (who === '__staff' ? !isOwnerEmail(e.by) : e.by === who)) &&
+      (!q || [e.by, e.action, e.order, e.details].join(' ').toLowerCase().includes(q))
+    ).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    const rows = list.map((e) => `<tr>
+        <td class="nowrap">${esc(fmtTime(e.at))}</td>
+        <td>${esc(e.by)}<br><span class="role-tag ${isOwnerEmail(e.by) ? 'r-owner' : 'r-staff'}">${isOwnerEmail(e.by) ? 'Owner' : 'Staff'}</span></td>
+        <td><span class="act-tag ${ACTION_CLASS[e.action] || ''}">${esc(e.action)}</span></td>
+        <td>${e.order ? (findOrder(e.order) ? `<button class="link-btn" data-act="receipt" data-id="${esc(e.order)}">${esc(e.order)}</button>` : esc(e.order)) : '—'}</td>
+        <td>${esc(e.details)}</td>
+      </tr>`).join('');
+    $('#log-table').innerHTML = list.length
+      ? `<div class="muted small" style="margin-bottom:8px">${list.length} action(s) on ${esc(keyToLabel(day))}</div>
+         <div class="table-wrap"><table class="tbl"><thead><tr><th>Time</th><th>Person</th><th>Action</th><th>Order</th><th>Details</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : `<div class="empty">No activity recorded on ${esc(keyToLabel(day))}.</div>`;
+  }
 
   // Orders saved by the older, offline-only version of the app on this device (same website address)
   let localUploadOffered = false;
@@ -535,18 +666,19 @@
   }
 
   /* ---------------- Navigation ---------------- */
-  const VIEWS = ['dashboard', 'new', 'paid', 'unpaid', 'completed', 'loyalty', 'sales', 'history'];
+  const VIEWS = ['dashboard', 'new', 'paid', 'unpaid', 'completed', 'loyalty', 'sales', 'history', 'activity'];
   let currentView = 'dashboard';
 
   function showView(name) {
     if (!VIEWS.includes(name)) name = 'dashboard';
-    if (name === 'sales' && !isOwner()) name = 'dashboard';
+    if ((name === 'sales' || name === 'activity') && !isOwner()) name = 'dashboard';
     currentView = name;
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
     $$('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
     if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
     if (name === 'dashboard') renderDashboard();
     if (name === 'sales') renderSales();
+    if (name === 'activity') renderActivity();
     if (name === 'new') setTimeout(() => { if (!$('#cust-name').value) $('#cust-name').focus(); }, 0);
     window.scrollTo(0, 0);
   }
@@ -2089,6 +2221,8 @@
       renderHistory();
     });
     $('#sales-date').addEventListener('input', renderSales);
+    ['#log-date', '#log-person', '#log-search'].forEach((s) => $(s).addEventListener('input', renderActivity));
+    $('#log-today').addEventListener('click', () => { $('#log-date').value = todayKey(); renderActivity(); });
 
     // Backup
     $('#btn-export').addEventListener('click', exportBackup);

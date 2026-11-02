@@ -35,10 +35,25 @@ Every device that signs in sees the same orders, updated live. Sign in with the 
   login is staff: no Sales Summary, no "Total Sales Today" on the Dashboard, and no Import, Export, Edit,
   Delete order or Delete loyalty card. Staff can still take orders, mark them paid/claimed, print receipts and add loyalty ticks.
 
-Firestore security rules (Firestore → Rules) must allow only signed-in users:
+- **Activity Log** (owners only, in the sidebar): every new order, payment, claim, edit, delete, loyalty change and import
+  is recorded with the person's email and the time. Pick a day, filter by person or "Staff only", or search.
+
+Firestore security rules (Firestore → Rules). Only signed-in users can use the data, and nobody can erase the Activity Log:
 
 ```
-allow read, write: if request.auth != null;
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    match /days/{day} { allow read, write: if signedIn(); }
+    match /pos/{doc} { allow read, write: if signedIn(); }
+    match /counters/{day} { allow read, write: if signedIn(); }
+    match /logs/{day} {
+      allow read, create: if signedIn();
+      allow update: if signedIn() && request.resource.data.entries.hasAll(resource.data.entries);
+    }
+  }
+}
 ```
 
 ## Daily workflow
@@ -123,7 +138,7 @@ If you edit the file before importing, keep the sheet names and column headers, 
 
 Firestore layout: `days/{YYYY-MM-DD}` holds that day's orders in a map `orders` (one document per day keeps
 the free-plan read count low), `pos/meta` holds `loyaltyAdjust`, `loyaltyDeleted` and `seq`, and
-`counters/{YYYY-MM-DD}` hands out order numbers. Each order looks like this:
+`counters/{YYYY-MM-DD}` hands out order numbers, and `logs/{YYYY-MM-DD}` holds that day's Activity Log entries. Each order looks like this:
 
 ```jsonc
 {

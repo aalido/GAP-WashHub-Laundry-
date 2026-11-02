@@ -24,6 +24,16 @@
     .sync-status.busy { color: var(--amber); }
     .sync-status.off { color: var(--red); }
     .signed-in-as { font-size: 12px; color: var(--muted); word-break: break-all; }
+    .act-tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; background: var(--gray-soft); color: var(--text); }
+    .act-tag.a-new { background: var(--primary-soft); color: var(--primary-dark); }
+    .act-tag.a-pay { background: var(--green-soft); color: var(--green); }
+    .act-tag.a-claim { background: #e0f2fe; color: #075985; }
+    .act-tag.a-warn { background: var(--amber-soft); color: var(--amber); }
+    .act-tag.a-del { background: var(--red-soft); color: var(--red); }
+    .role-tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+    .role-tag.r-owner { color: var(--royal); }
+    .role-tag.r-staff { color: var(--amber); }
+    #log-table td.nowrap { white-space: nowrap; }
     /* Staff logins: hide owner-only features */
     body.role-staff .owner-only, body.role-staff [data-view="sales"], body.role-staff [data-goto="sales"], body.role-staff #view-sales,
     body.role-staff [data-act="edit"], body.role-staff [data-act="delete"], body.role-staff #btn-edit-receipt,
@@ -57,6 +67,7 @@
       <button class="nav-btn" data-view="loyalty">★ Loyalty Card</button>
       <button class="nav-btn" data-view="sales">Sales Summary</button>
       <button class="nav-btn" data-view="history">Order History</button>
+      <button class="nav-btn owner-only" data-view="activity">Activity Log</button>
       <div class="nav-foot">
         <div class="nav-foot-title owner-only">Data backup</div>
         <button class="btn small ghost" id="btn-export">Export to Excel (.xlsx)</button>
@@ -246,6 +257,18 @@
           <button class="btn small ghost" id="hist-reset">Reset</button>
         </div>
         <div class="card" id="hist-table"></div>
+      </section>
+
+      <!-- ===== Activity log (owners only) ===== -->
+      <section class="view owner-only" id="view-activity">
+        <div class="view-head"><h1>Activity Log</h1><span class="muted">Who did what, and when</span></div>
+        <div class="filters">
+          <input type="date" id="log-date" title="Day">
+          <button class="btn small ghost" id="log-today">Today</button>
+          <select id="log-person" title="Person"><option value="">Everyone</option></select>
+          <input class="search" id="log-search" type="search" placeholder="Search name, order no. or action">
+        </div>
+        <div class="card" id="log-table"></div>
       </section>
     </main>
   </div>
