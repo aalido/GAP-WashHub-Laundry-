@@ -4,36 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GAP WashHub Laundry POS</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="css/styles.css">
   <style id="page-style"></style>
-  <style>
-    /* Login screen + online status (Firebase version) */
-    .auth-screen { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px;
-      background: linear-gradient(160deg, var(--navy), var(--royal) 60%, var(--sky)); }
-    .auth-box { background: #fff; border-radius: 14px; width: 100%; max-width: 380px; padding: 28px 24px; box-shadow: 0 20px 50px rgba(0,0,0,.3); text-align: center; }
-    .auth-box img { width: 84px; height: 84px; object-fit: contain; }
-    .auth-box h1 { font-size: 20px; margin: 10px 0 2px; color: var(--navy); }
-    .auth-box p { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
-    .auth-box form { display: flex; flex-direction: column; gap: 10px; text-align: left; }
-    .auth-box label { font-size: 13px; font-weight: 600; color: var(--text); }
-    .auth-box input { width: 100%; font-size: 16px; padding: 11px 12px; }
-    .auth-box .btn { width: 100%; margin-top: 6px; }
-    .auth-error { color: var(--red); font-size: 14px; min-height: 1.2em; }
-    .sync-status { font-size: 12px; font-weight: 600; margin: 2px 0 2px; }
-    .sync-status.ok { color: var(--green); }
-    .sync-status.busy { color: var(--amber); }
-    .sync-status.off { color: var(--red); }
-    .signed-in-as { font-size: 12px; color: var(--muted); word-break: break-all; }
-    @media (max-width: 960px) { .sync-status, .signed-in-as { white-space: nowrap; word-break: normal; } }
-  </style>
 </head>
 <body>
 <div id="app">
   <!-- ===== Top bar ===== -->
   <header class="topbar">
     <div class="brand">
-      <!-- Logo: logo.webp (falls back to a "GAP" badge if the file is missing) -->
-      <div class="logo"><img src="logo.webp" alt="GAP WashHub Laundry logo" onerror="this.parentNode.textContent='GAP'"></div>
+      <!-- Logo: images/logo.webp (falls back to a "GAP" badge if the file is missing) -->
+      <div class="logo"><img src="images/logo.webp" alt="GAP WashHub Laundry logo" onerror="this.parentNode.textContent='GAP'"></div>
       <div>
         <div class="brand-name">GAP <span class="bn-hub">WashHub</span> <span class="bn-laundry">Laundry</span></div>
         <div class="brand-addr">Lot 3 Blk 14E Phase 3C Tamban St. Kaunlaran Village, Caloocan City</div>
@@ -58,10 +38,6 @@
         <button class="btn small ghost" id="btn-export">Export to Excel (.xlsx)</button>
         <button class="btn small ghost" id="btn-import">Import from Excel (.xlsx)</button>
         <input type="file" id="import-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.json" hidden>
-        <div class="nav-foot-title" style="margin-top:10px">Account</div>
-        <div class="sync-status busy" id="sync-status">● Connecting…</div>
-        <div class="signed-in-as" id="signed-in-as"></div>
-        <button class="btn small ghost" id="btn-signout">Sign out</button>
       </div>
     </nav>
 
@@ -189,7 +165,7 @@
           <h1>★ Loyalty Card</h1>
           <input class="search" id="loyalty-search" type="search" placeholder="Search name or contact">
         </div>
-        <p class="muted">1 tick per basket. The <b>7th</b> and <b>14th</b> tick each earn <b>1 FREE Package A</b>, then a new card starts.
+        <p class="muted">1 tick per Package A, B or C. The <b>7th</b> and <b>14th</b> tick each earn <b>1 FREE Package A</b>, then a new card starts.
           <span id="loyalty-summary"></span></p>
 
         <div class="card ladj" id="ladj-form">
@@ -357,28 +333,6 @@
 <!-- Only this element is printed -->
 <div id="print-area"></div>
 
-<!-- ===== Login screen ===== -->
-<div class="auth-screen" id="auth-screen">
-  <div class="auth-box">
-    <img src="logo.webp" alt="GAP WashHub Laundry logo" onerror="this.remove()">
-    <h1>GAP WashHub Laundry POS</h1>
-    <p>Sign in to see and save orders on any device.</p>
-    <div id="auth-loading">Loading…</div>
-    <form id="auth-form" hidden>
-      <label for="auth-email">Email</label>
-      <input type="email" id="auth-email" autocomplete="username" required>
-      <label for="auth-password">Password</label>
-      <input type="password" id="auth-password" autocomplete="current-password" required>
-      <div class="auth-error" id="auth-error"></div>
-      <button class="btn primary big" type="submit" id="auth-submit">Sign in</button>
-    </form>
-  </div>
-</div>
-
-<!-- Firebase (online database + login) -->
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="app.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>

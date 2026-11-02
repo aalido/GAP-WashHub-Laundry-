@@ -83,10 +83,10 @@ Payment status (PAID / NOT PAID) and laundry status (PROCESSING / COMPLETED) are
 
 ## Loyalty card (★ Loyalty Card section)
 
-- **1 tick per basket.** The **7th** and **14th** ticks each earn **1 FREE Package A**. After 14 ticks a new card starts.
+- **1 tick per Package A, B or C.** The **7th** and **14th** ticks each earn **1 FREE Package A**. After 14 ticks a new card starts.
 - **Ticks per order:** shown under the order list on New Order. They're counted automatically:
-  - Wash & Dry, Wash Dry & Fold, Spin & Dry and Packages A, B and C each count as 1 basket.
-  - Wash plus Dry (or Dry & Fold) done on the same basket counts as 1.
+  - Each Package A, B or C counts as 1 tick (e.g. 2x Package B = 2 ticks).
+  - Regular laundry services (Wash, Dry, Wash & Dry, etc.) and add-ons do not earn ticks.
   - Use − / + to change the count. Tap "(edited)" to go back to automatic.
 - **Status while ordering:** once the customer name is typed, the panel shows their card. It announces when this order earns a free one.
 - **Using a free:** tap the **Free (Package A)** service button (₱0). If the customer has no free available, the app asks before adding it.
