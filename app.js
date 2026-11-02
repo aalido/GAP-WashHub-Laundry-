@@ -1,7 +1,9 @@
 /* ==========================================================
    GAP WashHub Laundry POS — application logic
-   Plain JavaScript, no dependencies. Data is stored in the
-   browser's localStorage so it survives page refreshes.
+   Plain JavaScript. Data is stored online in Google Firebase
+   (Cloud Firestore), so every logged-in device sees the same
+   orders in real time. Firestore also keeps a copy on the
+   device, so the app keeps working offline and syncs later.
    ========================================================== */
 (function () {
   'use strict';
@@ -71,41 +73,306 @@
   const todayKey = () => dateKey(new Date());
   const keyToLabel = (k) => fmtLongDate(k + 'T12:00:00+08:00');
 
+  /* ---------------- Firebase (shared online storage) ---------------- */
+  // From Firebase console → Project settings → Your apps → Web app. These values are not secret:
+  // the database is protected by login + the Firestore security rules.
+  const FIREBASE_CONFIG = {
+    apiKey: 'AIzaSyB_JaYjEdrUmvplformJNA1PxmVD28ej4E',
+    authDomain: 'gap-washhub-laundry.firebaseapp.com',
+    projectId: 'gap-washhub-laundry',
+    storageBucket: 'gap-washhub-laundry.firebasestorage.app',
+    messagingSenderId: '485829846462',
+    appId: '1:485829846462:web:31035ba06522753d5b45ef'
+  };
+  const SETTINGS_KEY = 'gapwashhub_pos_settings_v1'; // paper size etc. stay per device
+
   /* ---------------- Storage ---------------- */
   function emptyDB() { return { version: 1, orders: [], seq: {}, loyaltyAdjust: [], loyaltyDeleted: [], settings: { paper: '80' } }; }
+  const clone = (x) => JSON.parse(JSON.stringify(x));
 
-  function loadDB() {
-    try {
-      const d = JSON.parse(localStorage.getItem(DB_KEY));
-      if (d && Array.isArray(d.orders)) {
-        const base = emptyDB();
-        return { ...base, ...d, settings: { ...base.settings, ...(d.settings || {}) }, seq: d.seq || {},
-          loyaltyAdjust: Array.isArray(d.loyaltyAdjust) ? d.loyaltyAdjust : [],
-          loyaltyDeleted: Array.isArray(d.loyaltyDeleted) ? d.loyaltyDeleted : [] };
-      }
-    } catch (e) { /* fall through */ }
-    return emptyDB();
+  function loadSettings() {
+    try { return { paper: '80', ...(JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}) }; } catch (e) { return { paper: '80' }; }
   }
 
-  function saveDB() {
-    try {
-      localStorage.setItem(DB_KEY, JSON.stringify(db));
-      return true;
-    } catch (e) {
-      alert('WARNING: Could not save data to this browser. Please export a backup and free up storage.');
-      return false;
+  // `db` is the in-memory copy of the shared data. The Firestore listeners keep it up to date.
+  let db = emptyDB();
+  db.settings = loadSettings();
+  function loadDB() { return db; }
+
+  // Every change: apply to the in-memory copy, send the differences to Firestore, re-render.
+  function mutate(fn) {
+    const before = clone(db);
+    const result = fn(db);
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(db.settings)); } catch (e) { /* ignore */ }
+    cloud.push(before, db);
+    renderAll();
+    return result;
+  }
+
+  /*
+   Firestore layout (designed to keep the free-plan read count low):
+     days/{YYYY-MM-DD}  → { orders: { "<orderId>|<token>": order, ... } }   one document per day
+     pos/meta           → { loyaltyAdjust: [], loyaltyDeleted: [], seq: { "YYYY-MM-DD": n } }
+     counters/{YYYY-MM-DD} → { n }   hands out unique order numbers across devices
+  */
+  const cloud = {
+    fs: null, auth: null, user: null,
+    days: new Map(), meta: null,
+    ready: { days: false, meta: false },
+    pending: 0, fromCache: true, unsub: [], started: false,
+
+    dayOf(o) {
+      const m = /^GAP-(\d{2})(\d{2})(\d{2})-/.exec(o.id || '');
+      return m ? `20${m[1]}-${m[2]}-${m[3]}` : dateKey(o.createdAt || Date.now());
+    },
+    // Map key of an order inside its day document. Includes the checkout token so two orders that
+    // accidentally got the same number (two devices offline at once) are both kept.
+    keyOf(o) { return String(o.id) + '|' + String(o.checkoutToken || ''); },
+
+    // Rebuild the in-memory db from the Firestore documents
+    rebuild() {
+      const orders = [];
+      this.days.forEach((d) => { Object.values((d && d.orders) || {}).forEach((o) => { if (o && o.id) orders.push(o); }); });
+      orders.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
+      const m = this.meta || {};
+      db = { ...emptyDB(), orders,
+        seq: { ...(m.seq || {}) },
+        loyaltyAdjust: Array.isArray(m.loyaltyAdjust) ? m.loyaltyAdjust : [],
+        loyaltyDeleted: Array.isArray(m.loyaltyDeleted) ? m.loyaltyDeleted : [],
+        settings: db.settings };
+      if (this.ready.days && this.ready.meta) {
+        hideAuthScreen();
+        renderAll();
+        if (!this.fromCache) offerLocalUpload();
+      }
+      renderSyncStatus();
+    },
+
+    // Firestore writes are limited to 500 per batch
+    async commit(ops) {
+      const F = firebase.firestore;
+      for (let i = 0; i < ops.length; i += 400) {
+        const batch = this.fs.batch();
+        ops.slice(i, i + 400).forEach((op) => {
+          if (op.t === 'set') batch.set(op.ref, op.data, op.opt || {});
+          else if (op.t === 'update') batch.update(op.ref, new F.FieldPath(...op.path), op.value);
+          else if (op.t === 'delete') batch.delete(op.ref);
+        });
+        this.pending += 1; renderSyncStatus();
+        try { await batch.commit(); }
+        finally { this.pending -= 1; renderSyncStatus(); }
+      }
+    },
+
+    // Send what changed between two versions of the db
+    push(before, after) {
+      if (!this.fs) return;
+      const F = firebase.firestore;
+      const ops = [];
+      const touched = new Set();
+      const dayRef = (k) => {
+        const ref = this.fs.collection('days').doc(k);
+        if (!touched.has(k)) { touched.add(k); ops.push({ t: 'set', ref, data: {}, opt: { merge: true } }); }
+        return ref;
+      };
+      const bMap = new Map(before.orders.map((o) => [this.keyOf(o), o]));
+      const aMap = new Map(after.orders.map((o) => [this.keyOf(o), o]));
+      aMap.forEach((o, k) => {
+        const b = bMap.get(k);
+        const clean = clone(o);
+        if (b && JSON.stringify(b) === JSON.stringify(clean)) return;
+        ops.push({ t: 'update', ref: dayRef(this.dayOf(o)), path: ['orders', k], value: clean });
+      });
+      bMap.forEach((o, k) => {
+        if (aMap.has(k)) return;
+        ops.push({ t: 'update', ref: dayRef(this.dayOf(o)), path: ['orders', k], value: F.FieldValue.delete() });
+      });
+      const metaRef = this.fs.collection('pos').doc('meta');
+      const metaData = {};
+      if (JSON.stringify(before.loyaltyAdjust || []) !== JSON.stringify(after.loyaltyAdjust || [])) metaData.loyaltyAdjust = clone(after.loyaltyAdjust || []);
+      if (JSON.stringify(before.loyaltyDeleted || []) !== JSON.stringify(after.loyaltyDeleted || [])) metaData.loyaltyDeleted = clone(after.loyaltyDeleted || []);
+      const seq = {};
+      Object.keys(after.seq || {}).forEach((k) => { if ((before.seq || {})[k] !== after.seq[k]) seq[k] = after.seq[k]; });
+      if (Object.keys(seq).length) metaData.seq = seq;
+      if (Object.keys(metaData).length) ops.push({ t: 'set', ref: metaRef, data: metaData, opt: { merge: true } });
+      if (!ops.length) return;
+      this.commit(ops).catch((e) => cloudError(e));
+    },
+
+    // Replace ALL shared data (used by Import). Deletes every day document, then writes the new ones.
+    async replaceAll(data) {
+      const ops = [];
+      const snap = await this.fs.collection('days').get();
+      snap.forEach((d) => ops.push({ t: 'delete', ref: d.ref }));
+      const byDay = new Map();
+      (data.orders || []).forEach((o) => {
+        const k = this.dayOf(o);
+        if (!byDay.has(k)) byDay.set(k, {});
+        byDay.get(k)[this.keyOf(o)] = clone(o);
+      });
+      byDay.forEach((orders, k) => ops.push({ t: 'set', ref: this.fs.collection('days').doc(k), data: { orders } }));
+      ops.push({ t: 'set', ref: this.fs.collection('pos').doc('meta'), data: {
+        loyaltyAdjust: clone(data.loyaltyAdjust || []), loyaltyDeleted: clone(data.loyaltyDeleted || []), seq: clone(data.seq || {}) } });
+      // Deletes must land before the new documents for the same day, so commit in order
+      await this.commit(ops);
+    },
+
+    // Ask the server for the next order number of the day, so two devices never use the same one.
+    // Returns null when offline or slow; the app then numbers the order on this device.
+    async reserveOrderId(nowIso) {
+      if (!this.fs || !navigator.onLine) return null;
+      const k = dateKey(nowIso);
+      const prefix = 'GAP-' + k.replace(/-/g, '').slice(2) + '-';
+      let localMax = db.seq[k] || 0;
+      db.orders.forEach((o) => { if (String(o.id).startsWith(prefix)) localMax = Math.max(localMax, parseInt(o.id.slice(prefix.length), 10) || 0); });
+      const ref = this.fs.collection('counters').doc(k);
+      const tx = this.fs.runTransaction(async (t) => {
+        const s = await t.get(ref);
+        const n = Math.max((s.exists && s.data().n) || 0, localMax) + 1;
+        t.set(ref, { n });
+        return n;
+      });
+      const n = await Promise.race([tx, new Promise((r) => setTimeout(() => r(null), 3000))]).catch(() => null);
+      return n ? prefix + String(n).padStart(3, '0') : null;
+    },
+
+    listen() {
+      this.stop();
+      this.ready = { days: false, meta: false };
+      this.days = new Map(); this.meta = null;
+      this.unsub.push(this.fs.collection('days').onSnapshot({ includeMetadataChanges: true }, (snap) => {
+        snap.docChanges().forEach((ch) => {
+          if (ch.type === 'removed') this.days.delete(ch.doc.id);
+          else this.days.set(ch.doc.id, ch.doc.data());
+        });
+        this.fromCache = snap.metadata.fromCache;
+        this.ready.days = true;
+        this.rebuild();
+      }, (e) => cloudError(e)));
+      this.unsub.push(this.fs.collection('pos').doc('meta').onSnapshot((d) => {
+        this.meta = d.exists ? d.data() : {};
+        this.ready.meta = true;
+        this.rebuild();
+      }, (e) => cloudError(e)));
+    },
+    stop() { this.unsub.forEach((u) => { try { u(); } catch (e) { /* ignore */ } }); this.unsub = []; }
+  };
+
+  // Orders saved by the older, offline-only version of the app on this device (same website address)
+  let localUploadOffered = false;
+  async function offerLocalUpload() {
+    if (localUploadOffered) return;
+    localUploadOffered = true;
+    let old = null;
+    try { old = JSON.parse(localStorage.getItem(DB_KEY)); } catch (e) { return; }
+    if (!old || !Array.isArray(old.orders) || !old.orders.length) return;
+    const have = new Set(db.orders.map((o) => o.id));
+    const missing = old.orders.filter((o) => o && o.id && !have.has(o.id));
+    if (!missing.length) { localStorage.removeItem(DB_KEY); return; }
+    const ok = await ask(`This device has ${missing.length} order(s) saved by the older offline version of the app.\n\nUpload them to the online database so all devices can see them?`, 'Upload', 'primary');
+    if (!ok) return;
+    mutate((d) => {
+      d.orders.push(...missing);
+      const keys = (a) => new Set((a || []).map((x) => JSON.stringify(x)));
+      const ka = keys(d.loyaltyAdjust); (old.loyaltyAdjust || []).forEach((x) => { if (!ka.has(JSON.stringify(x))) d.loyaltyAdjust.push(x); });
+      const kd = keys(d.loyaltyDeleted); (old.loyaltyDeleted || []).forEach((x) => { if (!kd.has(JSON.stringify(x))) d.loyaltyDeleted.push(x); });
+      Object.entries(old.seq || {}).forEach(([k, v]) => { d.seq[k] = Math.max(d.seq[k] || 0, v || 0); });
+    });
+    try { localStorage.setItem(DB_KEY + '_uploaded', localStorage.getItem(DB_KEY)); localStorage.removeItem(DB_KEY); } catch (e) { /* ignore */ }
+    toast(`Uploaded ${missing.length} order(s).`);
+  }
+
+  function cloudError(e) {
+    console.error(e);
+    const code = (e && e.code) || '';
+    if (code === 'permission-denied') {
+      alert('The database refused this request (permission denied).\n\nCheck that you are signed in, and that the Firestore Rules allow signed-in users.');
+    } else {
+      alert('Could not save to the online database.\n\n' + ((e && e.message) || e) + '\n\nYour last change may not have been saved. Please check your internet and try again.');
     }
   }
 
-  let db = loadDB();
+  function renderSyncStatus() {
+    const el = $('#sync-status');
+    if (!el) return;
+    const online = navigator.onLine;
+    let cls = 'ok'; let txt = '● Online · saved';
+    if (!online) { cls = 'off'; txt = '● Offline · will sync later'; }
+    else if (cloud.pending > 0) { cls = 'busy'; txt = '● Saving…'; }
+    else if (cloud.fromCache) { cls = 'busy'; txt = '● Connecting…'; }
+    el.className = 'sync-status ' + cls;
+    el.textContent = txt;
+    const who = $('#signed-in-as');
+    if (who) who.textContent = cloud.user ? cloud.user.email : '';
+  }
 
-  // Every change: re-read latest data (in case another tab changed it), apply, save, re-render.
-  function mutate(fn) {
-    db = loadDB();
-    const result = fn(db);
-    saveDB();
-    renderAll();
-    return result;
+  /* ---------------- Login screen ---------------- */
+  function showAuthScreen(mode) {
+    const s = $('#auth-screen');
+    s.hidden = false;
+    $('#auth-form').hidden = mode !== 'login';
+    $('#auth-loading').hidden = mode !== 'loading';
+    if (mode === 'login') setTimeout(() => $('#auth-email').focus(), 50);
+  }
+  function hideAuthScreen() { $('#auth-screen').hidden = true; }
+
+  function authMessage(e) {
+    const c = (e && e.code) || '';
+    if (/invalid-credential|wrong-password|user-not-found|invalid-email|invalid-login/.test(c)) return 'Wrong email or password.';
+    if (/too-many-requests/.test(c)) return 'Too many tries. Wait a few minutes, then try again.';
+    if (/network-request-failed/.test(c)) return 'No internet connection. Connect and try again.';
+    if (/unauthorized-domain/.test(c)) return 'This website address is not allowed yet. In Firebase: Authentication → Settings → Authorized domains → add this site.';
+    return (e && e.message) || 'Could not sign in.';
+  }
+
+  function startCloud() {
+    if (typeof firebase === 'undefined') {
+      showAuthScreen('login');
+      $('#auth-error').textContent = 'Could not load Firebase. Check your internet connection, then reload the page.';
+      $('#auth-submit').disabled = true;
+      return;
+    }
+    firebase.initializeApp(FIREBASE_CONFIG);
+    cloud.auth = firebase.auth();
+    cloud.fs = firebase.firestore();
+    // Keep a copy on this device so the app opens fast and works offline
+    cloud.fs.enablePersistence({ synchronizeTabs: true }).catch(() => { /* not supported: still works online */ });
+
+    $('#auth-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = $('#auth-submit');
+      $('#auth-error').textContent = '';
+      btn.disabled = true; btn.textContent = 'Signing in…';
+      try {
+        await cloud.auth.signInWithEmailAndPassword($('#auth-email').value.trim(), $('#auth-password').value);
+        $('#auth-password').value = '';
+      } catch (err) {
+        $('#auth-error').textContent = authMessage(err);
+      } finally {
+        btn.disabled = false; btn.textContent = 'Sign in';
+      }
+    });
+    $('#btn-signout').addEventListener('click', async () => {
+      if (!(await ask('Sign out of this device?\n\nYou will need the email and password to sign in again.', 'Sign out', 'danger'))) return;
+      cloud.stop();
+      await cloud.auth.signOut();
+    });
+
+    cloud.auth.onAuthStateChanged((user) => {
+      cloud.user = user;
+      if (user) {
+        showAuthScreen('loading');
+        cloud.listen();
+      } else {
+        cloud.stop();
+        db = { ...emptyDB(), settings: db.settings };
+        renderAll();
+        showAuthScreen('login');
+      }
+      renderSyncStatus();
+    });
+    window.addEventListener('online', renderSyncStatus);
+    window.addEventListener('offline', renderSyncStatus);
   }
 
   function findOrder(id) { return db.orders.find((o) => o.id === id); }
@@ -120,6 +387,12 @@
       id = 'GAP-' + k.replace(/-/g, '').slice(2) + '-' + String(n).padStart(3, '0');
     } while (d.orders.some((o) => o.id === id));
     d.seq[k] = n;
+    return id;
+  }
+
+  function useReservedId(d, id) {
+    const m = /^GAP-(\d{2})(\d{2})(\d{2})-(\d+)$/.exec(id);
+    if (m) { const k = `20${m[1]}-${m[2]}-${m[3]}`; d.seq[k] = Math.max(d.seq[k] || 0, parseInt(m[4], 10)); }
     return id;
   }
 
@@ -1041,7 +1314,7 @@
     return true;
   }
 
-  function confirmPayment() {
+  async function confirmPayment() {
     if (payBusy || !pay) return;
     if (!updateChange()) {
       if (pay.status === 'PAID' && $('#pay-received').value.trim() === '') $('#pay-error').textContent = 'Enter the amount received or click EXACT AMOUNT.';
@@ -1099,13 +1372,15 @@
         const total = cartTotal();
         const ticks = cartTicks();
         let duplicate = false;
+        // Get a unique order number from the server (falls back to this device when offline)
+        const reservedId = cart.items.length ? await cloud.reserveOrderId(now) : null;
         saved = mutate((d) => {
           // Duplicate protection: the same cart can only ever create one order.
           const existing = d.orders.find((o) => o.checkoutToken === token);
           if (existing) { duplicate = true; return existing; }
           const payment = session.status === 'PAID' ? mkPayment(total) : null;
           const o = {
-            id: nextOrderId(d, now),
+            id: reservedId && !d.orders.some((x) => x.id === reservedId) ? useReservedId(d, reservedId) : nextOrderId(d, now),
             checkoutToken: token,
             createdAt: now,
             customer: { name: cart.name, contact: cart.contact },
@@ -1352,14 +1627,14 @@
   }
 
   /* ---------------- Backup: Excel (.xlsx) export / import ---------------- */
-  // The Excel library (SheetJS) is bundled in js/vendor and loaded only when needed.
+  // The Excel library (SheetJS) is bundled (xlsx.full.min.js) and loaded only when needed.
   let xlsxLoading = null;
   function loadXLSX() {
     if (window.XLSX) return Promise.resolve(window.XLSX);
     if (!xlsxLoading) {
       xlsxLoading = new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        s.src = 'js/vendor/xlsx.full.min.js';
+        s.src = 'xlsx.full.min.js';
         s.onload = () => resolve(window.XLSX);
         s.onerror = () => { xlsxLoading = null; reject(new Error('Could not load the Excel library.')); };
         document.head.appendChild(s);
@@ -1593,12 +1868,17 @@
       alert('Could not import this file.\n\n' + (e && e.message ? e.message : ''));
       return;
     }
-    const ok = await ask(`Import ${data.orders.length} order(s) from "${file.name}"?\n\nThis REPLACES the current data on this device (${db.orders.length} order(s)). Export first if you want to keep a copy.`, 'Import & Replace', 'danger');
+    const ok = await ask(`Import ${data.orders.length} order(s) from "${file.name}"?\n\nThis REPLACES the shared online data for ALL devices (${db.orders.length} order(s) now). Export first if you want to keep a copy.`, 'Import & Replace', 'danger');
     if (!ok) return;
-    localStorage.setItem(DB_KEY, JSON.stringify(data));
-    db = loadDB();
-    renderAll();
-    toast('Imported ' + data.orders.length + ' order(s).');
+    if (!navigator.onLine) { alert('Import needs an internet connection. Connect and try again.'); return; }
+    toast('Importing… please wait.');
+    try {
+      await cloud.replaceAll(data);
+    } catch (e) {
+      cloudError(e);
+      return;
+    }
+    toast('Imported ' + data.orders.length + ' order(s). All devices now see this data.');
   }
 
   /* ---------------- Clock ---------------- */
@@ -1794,7 +2074,6 @@
 
     // Keep multiple open tabs in sync
     window.addEventListener('storage', (e) => {
-      if (e.key === DB_KEY) { db = loadDB(); renderAll(); }
       if (e.key === DRAFT_KEY) { cart = loadDraft(); syncCartInputs(); renderCart(); }
     });
     window.addEventListener('hashchange', () => showView(location.hash.slice(1)));
@@ -1813,6 +2092,7 @@
     // refresh "today" figures every minute (handles midnight rollover)
     setInterval(() => { if (currentView === 'dashboard') renderDashboard(); }, 60000);
     showView(location.hash.slice(1) || 'dashboard');
+    startCloud();
   }
 
   init();

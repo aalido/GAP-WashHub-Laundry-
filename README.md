@@ -9,29 +9,34 @@ browser (Chrome or Edge recommended). It needs **no internet, no installation an
 
 ```
 gap-washhub-pos/
-├── index.html        # App layout: dashboard, POS, order lists, payment & receipt dialogs
-├── css/styles.css    # Design, responsive layout and thermal-receipt print styles
-├── js/app.js         # All logic: services, cart, payments, statuses, receipts, storage
-├── js/vendor/xlsx.full.min.js  # SheetJS library for Excel import/export (bundled, works offline)
+├── index.html         # App layout: dashboard, POS, order lists, payment & receipt dialogs
+├── styles.css         # Design, responsive layout and thermal-receipt print styles
+├── app.js             # All logic: services, cart, payments, statuses, receipts, storage
+├── xlsx.full.min.js   # SheetJS library for Excel import/export (bundled, works offline)
+├── logo.webp          # Shop logo
 └── README.md
 ```
 
-## How to run
+All files sit in one folder so they can be uploaded to GitHub from a tablet in one go.
 
-**Option 1: just open it.** Double-click `index.html`. It opens in your browser and works right away.
+## How to run (online, shared by all devices)
 
-**Option 2: local server (recommended for daily use).** This gives the app a fixed address, so its data stays in one place:
+The app is hosted on GitHub Pages: **https://aalido.github.io/GAP-WashHub-Laundry-/**
 
-```bash
-cd gap-washhub-pos
-python -m http.server 8765
+Orders are saved in **Google Firebase (Cloud Firestore)**, project `gap-washhub-laundry`, on the free Spark plan.
+Every device that signs in sees the same orders, updated live. Sign in with the shop email and password
+(created in Firebase → Authentication → Users). To add staff, add another user there.
+
+- The status under **Account** in the sidebar shows **Online · saved**, **Saving…**, or **Offline · will sync later**.
+- Without internet the app still works on that device and sends the changes when the connection returns.
+- Order numbers come from the server, so two devices never use the same number while online.
+- The Firebase settings are in `FIREBASE_CONFIG` near the top of `app.js`.
+
+Firestore security rules (Firestore → Rules) must allow only signed-in users:
+
 ```
-
-Then open **http://localhost:8765** in Chrome or Edge. Bookmark it, or pin it as an app from the browser menu.
-
-> Data is tied to the browser **and** the address you open it from. Use the same browser and
-> the same address every day. If you switch from Option 1 to Option 2, you start with empty data
-> unless you first export a backup and then import it.
+allow read, write: if request.auth != null;
+```
 
 ## Daily workflow
 
@@ -94,7 +99,7 @@ Payment status (PAID / NOT PAID) and laundry status (PROCESSING / COMPLETED) are
 - **Matching customers:** customers are matched by contact number. When there's no contact number, they're matched by name.
 - **Paper cards and corrections:** in the Loyalty Card section, use **Add paper card / Adjust ticks** to enter ticks from an existing paper card, or to fix a mistake (e.g. `-1`).
 - **Deleted orders:** deleting an order also removes its ticks.
-- **Changing the rules:** the numbers (7 and 14) are in `LOYALTY` at the top of `js/app.js`.
+- **Changing the rules:** the numbers (7 and 14) are in `LOYALTY` at the top of `app.js`.
 
 ## Printing on a thermal printer
 
@@ -104,19 +109,18 @@ Payment status (PAID / NOT PAID) and laundry status (PROCESSING / COMPLETED) are
 
 ## Backups (important)
 
-All data is saved in this browser's storage on this device. Use **Export to Excel (.xlsx)** (sidebar) at
-the end of each day and keep copies on a flash drive or in Google Drive. The Excel file has 6 sheets:
-**Orders**, **Order Items**, **Payments**, **Daily Sales** (gross, expenses and net per day), **Loyalty Cards**
-(each customer's ticks and frees) and **Loyalty Adjustments** (paper-card entries).
+Data is stored online, but still use **Export to Excel (.xlsx)** (sidebar) regularly and keep copies on a flash drive
+or in Google Drive. The Excel file has 6 sheets: **Orders**, **Order Items**, **Payments**, **Daily Sales**
+(gross, expenses and net per day), **Loyalty Cards** and **Loyalty Adjustments**.
 
-**Import from Excel (.xlsx)** restores a file made with Export. It *replaces* the data currently on the device.
-You can open and read the file in Excel or Google Sheets. If you edit it before importing, keep the sheet names
-and column headers, and do not change the "(ISO)" date columns. Older `.json` backups can still be imported.
-Clearing the browser's history or site data **deletes** the records, so do not clear them without a backup.
+**Import from Excel (.xlsx)** restores a file made with Export. It *replaces* the shared online data for **all devices**.
+If you edit the file before importing, keep the sheet names and column headers, and do not change the "(ISO)" date columns.
 
 ## Data model
 
-The data is saved under the localStorage key `gapwashhub_pos_db_v1`:
+Firestore layout: `days/{YYYY-MM-DD}` holds that day's orders in a map `orders` (one document per day keeps
+the free-plan read count low), `pos/meta` holds `loyaltyAdjust`, `loyaltyDeleted` and `seq`, and
+`counters/{YYYY-MM-DD}` hands out order numbers. Each order looks like this:
 
 ```jsonc
 {
@@ -147,9 +151,9 @@ payment_status, paid_at, order_status, completed_at)`, `order_items(order_id, se
 
 ## Logo and colors
 
-The logo is `images/logo.webp` (top-left of the screen). To change it, replace that file with a new one of the same name.
-The brand colors (navy, royal blue, sky blue, yellow, red) are defined at the top of `css/styles.css`.
+The logo is `logo.webp` (top-left of the screen). To change it, replace that file with a new one of the same name.
+The brand colors (navy, royal blue, sky blue, yellow, red) are defined at the top of `styles.css`.
 
 ## Changing prices or services
 
-Edit the `SERVICES` list at the top of `js/app.js`. Past orders keep the prices they were charged.
+Edit the `SERVICES` list at the top of `app.js`. Past orders keep the prices they were charged.
