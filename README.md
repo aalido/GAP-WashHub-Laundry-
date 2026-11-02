@@ -85,7 +85,11 @@ NEW ORDER → CHECKOUT → NOT PAID → (MARK AS PAID when the customer pays and
      plus the order details. It has no shop header, loyalty box or closing text.
    The number restarts at 001 each day. To find an order, type the number (e.g. `3` or `#003`) in any search box.
    Order cards and tables show it as **#003**. Expense records have no pick-up number.
-4. **Paid – Need to Get Out**: when the customer picks up their laundry, tap **MARK AS COMPLETED / CLAIMED**.
+4. **Text the customer**: when the laundry is done, tap **📱 TEXT: READY FOR PICK-UP** on the order (shown when the order
+   has a contact number). The tablet's Messages app opens with the number and message filled in. Tap **Send**.
+   The order then shows "Texted (ready for pick-up)" with the time, and the Activity Log records who texted.
+   The message is `READY_SMS` at the top of `app.js`. Sending uses the device's own SIM and load.
+   **Paid – Need to Get Out**: when the customer picks up their laundry, tap **MARK AS COMPLETED / CLAIMED**.
 5. **Not Paid**: tap **MARK AS PAID** when the customer pays. The order goes straight to **Completed Orders** (paid and claimed). If the laundry was already released
    ("Released without payment"), the order stays in Completed Orders and is only marked PAID.
    The **Payment Date & Time** field defaults to now, and you can change it if the payment happened on another day.

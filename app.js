@@ -15,6 +15,9 @@
   };
   const TZ = 'Asia/Manila';
 
+  // Text message sent with the "Text customer" button. {name} is replaced with the customer's name.
+  const READY_SMS = "Good day, Sir/Ma'am {name}! This is GAP WashHub Laundry. Ready to pick-up na po ang inyong laundry. Thank you po and Godbless!";
+
   // cat: main | pkg | add  (used for grouping on the POS screen)
   const SERVICES = [
     { id: 'wash',       name: 'Wash',                       price: 65,  cat: 'main' },
@@ -327,6 +330,9 @@
         return;
       }
       if (JSON.stringify(b) === JSON.stringify(o)) return;
+      if (o.notifiedAt && o.notifiedAt !== b.notifiedAt) {
+        out.push({ action: 'Texted customer', order: o.id, details: `${name} · ${(o.customer && o.customer.contact) || ''} · Ready for pick-up${o.notifyCount > 1 ? ' (text #' + o.notifyCount + ')' : ''}` });
+      }
       const edits = [];
       const bn = (b.customer && b.customer.name) || '', bc = (b.customer && b.customer.contact) || '', oc = (o.customer && o.customer.contact) || '';
       if (bn !== name) edits.push(`Name: ${bn} → ${name}`);
@@ -374,7 +380,7 @@
     return out;
   }
 
-  const ACTION_CLASS = { 'New order': 'a-new', 'New expense': 'a-new', 'Marked as paid': 'a-pay', 'Partial payment': 'a-pay',
+  const ACTION_CLASS = { 'Texted customer': 'a-claim', 'New order': 'a-new', 'New expense': 'a-new', 'Marked as paid': 'a-pay', 'Partial payment': 'a-pay',
     'Payment changed': 'a-warn', 'Marked as claimed': 'a-claim', 'Released without payment': 'a-warn', 'Undo claim': 'a-warn',
     'Edited order': 'a-warn', 'Deleted order': 'a-del', 'Deleted loyalty card': 'a-del', 'Loyalty ticks': 'a-claim', 'Imported from Excel': 'a-del' };
 
@@ -1024,6 +1030,7 @@
     let dates = `<div class="ocard-kv"><span>Date Ordered</span><span>${fmtDT(o.createdAt)}</span></div>`;
     if (o.paidAt) dates += `<div class="ocard-kv"><span>Date Paid</span><span>${fmtDT(o.paidAt)}</span></div>`;
     if (o.completedAt) dates += `<div class="ocard-kv"><span>Date Completed</span><span>${fmtDT(o.completedAt)}</span></div>`;
+    if (o.notifiedAt) dates += `<div class="ocard-kv"><span>Texted (ready for pick-up)</span><span>✓ ${fmtDT(o.notifiedAt)}</span></div>`;
 
     let actions = '';
     if (kind === 'paid') {
@@ -1034,6 +1041,12 @@
     } else if (kind === 'completed') {
       if (o.paymentStatus !== 'PAID') actions += `<button class="btn primary grow" data-act="pay" data-id="${o.id}">MARK AS PAID</button>`;
       if (toC(o.total) >= 0) actions += `<button class="btn ghost small" data-act="undo-claim" data-id="${o.id}">Undo claim</button>`;
+    }
+    // Text the customer that the laundry is ready (opens the Messages app with the text filled in)
+    const phone = normalizeContact(o.customer.contact);
+    if (phone && o.orderStatus !== 'COMPLETED' && toC(o.total) >= 0 && (kind === 'paid' || kind === 'unpaid')) {
+      const msg = READY_SMS.replace('{name}', o.customer.name);
+      actions += `<a class="btn ${o.notifiedAt ? 'ghost' : 'secondary'} grow sms-btn" href="sms:${esc(phone)}?body=${encodeURIComponent(msg)}" data-act="text" data-id="${o.id}">📱 ${o.notifiedAt ? 'Text again' : 'TEXT: READY FOR PICK-UP'}</a>`;
     }
     actions += `<button class="btn ghost small" data-act="receipt" data-id="${o.id}">View receipt</button>`;
     actions += `<button class="btn ghost small" data-act="print" data-id="${o.id}">Print</button>`;
@@ -1747,6 +1760,16 @@
     toast(`${o.customer.name}'s order moved to Completed Orders.`);
   }
 
+  // Called when "Text customer" is tapped. The link itself opens the Messages app; this records it.
+  function markTexted(id) {
+    setTimeout(() => {
+      mutate((d) => {
+        const x = d.orders.find((y) => y.id === id);
+        if (x) { x.notifiedAt = new Date().toISOString(); x.notifyCount = (x.notifyCount || 0) + 1; }
+      });
+    }, 400);
+  }
+
   async function releaseUnpaid(id) {
     const o = findOrder(id);
     if (!o) return;
@@ -2200,6 +2223,7 @@
       db = loadDB();
       switch (b.dataset.act) {
         case 'complete': markCompleted(id); break;
+        case 'text': markTexted(id); break;
         case 'pay': openSettle(id); break;
         case 'claim-unpaid': releaseUnpaid(id); break;
         case 'undo-claim': undoClaim(id); break;
